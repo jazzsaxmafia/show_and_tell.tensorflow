@@ -1,5 +1,6 @@
 #-*- coding: utf-8 -*-
 import os
+import ipdb
 import tensorflow as tf
 import numpy as np
 import pandas as pd
@@ -14,56 +15,80 @@ dim_hidden = 512
 dim_image = 4096
 batch_size = 100
 
-num_steps = 20
+n_lstm_steps = 20
 learning_rate = 0.001
 
-image = tf.placeholder(tf.float32, [batch_size, dim_image])
-sentence = tf.placeholder(tf.int32, [batch_size, num_steps])
-mask = tf.placeholder(tf.float32, [batch_size, num_steps])
+class Caption_Generator():
+    def init_weight(self, dim_in, dim_out, stddev=0.1):
+        return tf.Variable(tf.truncated_normal([dim_in, dim_out], stddev=stddev))
+
+    def init_bias(self, dim_out):
+        return tf.Variable(tf.zeros([dim_out]))
+
+    def __init__(self, dim_image, dim_embed, dim_hidden, batch_size, n_lstm_steps, n_words):
+        self.dim_image = dim_image
+        self.dim_embed = dim_embed
+        self.dim_hidden = dim_hidden
+        self.batch_size = batch_size
+        self.n_lstm_steps = n_lstm_steps
+        self.n_words = n_words
 
 
-Wemb = tf.Variable( # 워드 임베딩
-        tf.random_uniform([n_words, dim_embed], -1.0, 1.0))
+        self.Wemb = tf.Variable(tf.random_uniform([n_words, dim_embed], -1.0, 1.0))
 
-lstm = rnn_cell.BasicLSTMCell(dim_hidden)
+        self.lstm = rnn_cell.BasicLSTMCell(dim_hidden)
 
-encode_img_W = tf.Variable(
-        tf.truncated_normal([dim_image, dim_hidden], stddev=0.1)
-        )
-encode_img_b = tf.Variable(
-        tf.zeros([dim_hidden]),
-        )
+        self.encode_img_W = self.init_weight(dim_image, dim_hidden)
+        self.encode_img_b = self.init_bias(dim_hidden)
 
-hidden_emb_W = tf.Variable(
-        tf.truncated_normal([dim_hidden, dim_embed], stddev=0.1)
-        )
-hidden_embed_b = tf.Variable(
-        tf.zeros([dim_embed]),
-        )
+        self.hidden_emb_W = self.init_weight(dim_hidden, dim_embed)
+        self.hidden_emb_b = self.init_bias(dim_embed)
 
-embed_word_W = tf.Variable(
-        tf.truncated_normal([dim_embed, n_words], stddev=0.1)
-        )
-embed_word_b = tf.Variable(
-        tf.zeros([n_words]),
-        )
+        self.embed_word_W = self.init_weight(dim_embed, n_words)
+        self.embed_word_b = self.init_bias(n_words)
+
+    def build_model(self):
+        image = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])
+        sentence = tf.placeholder(tf.int32, [self.batch_size, self.n_lstm_steps])
+        mask = tf.placeholder(tf.float32, [self.batch_size, self.n_lstm_steps])
+
+        image_emb = tf.matmul(image, self.encode_img_W) + self.encode_img_b # (batch_size, dim_hidden)
+        image_emb = tf.expand_dims(image_emb, dim=1) # 이미지와 sentence가 차원이 달라서 더미 차원 추가해줘야함.
+        sentence_emb = tf.nn.embedding_lookup(self.Wemb, sentence) # (batch_size, n_samples, dim_hidden)
+
+        sentence_emb = tf.concat(concat_dim=1, values=[image_emb, sentence_emb])
+
+        initial_state = state = tf.zeros([self.batch_size, self.lstm.state_size])
+
+        loss = 0.0
+        output_list = []
+        with tf.variable_scope("RNN"):
+            for i in range(self.n_lstm_steps):
+                if i > 0 : tf.get_variable_scope().reuse_variables()
+                labels = tf.expand_dims(sentence[:, i], 1) # (batch_size)
+                indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
+                concated = tf.concat(1, [indices, labels])
+                onehot_labels = tf.sparse_to_dense(
+                        concated, tf.pack([batch_size, self.n_words]), 1.0, 0.0) # (batch_size, n_words)
+
+                output, state = self.lstm(sentence_emb[:,i,:], state) # (batch_size, dim_hidden)
+                output_list.append(output)
+
+                logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b # (batch_size, dim_embed)
+                logits = tf.nn.tanh(logits)
+
+                logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b # (batch_size, n_words)
+                cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
+                cross_entropy = cross_entropy * mask[:,i]#tf.expand_dims(mask, 1)
+
+                current_loss = tf.reduce_sum(cross_entropy)
+                loss = loss + current_loss
+
+        loss = loss / tf.reduce_sum(mask)
 
 
-image_emb = tf.matmul(image, encode_img_W) + encode_img_b # (batch_size, dim_hidden)
-image_emb = tf.expand_dims(image_emb, dim=1) # 이미지와 sentence가 차원이 달라서 더미 차원 추가해줘야함.
-sentence_emb = tf.nn.embedding_lookup(Wemb, sentence) # (batch_size, n_samples, dim_hidden)
 
-sentence_emb = tf.concat(concat_dim=1, values=[image_emb, sentence_emb])
-sentence_emb = tf.transpose(sentence_emb, perm=[1,0,2])
-#inputs = map(lambda x: tf.squeeze(x), tf.split(1, num_steps+1, sentence_emb))
-
-initial_state = state = tf.zeros([batch_size, lstm.state_size])
-#for i in range(num_steps):
-with tf.variable_scope("RNN"):
-    for i in range(21):
-        if i > 0 : tf.get_variable_scope().reuse_variables()
-        output, state = lstm(sentence_emb[i,:,:], state)
-
+        ipdb.set_trace()
 
 ################################################################
 def get_caption_data(annotation_path, image_path):
@@ -90,5 +115,15 @@ cnn = CNN(
      width=224,
      height=224)
 
+caption_generator = Caption_Generator(
+        dim_image=dim_image,
+        dim_hidden=dim_hidden,
+        dim_embed=dim_embed,
+        batch_size=batch_size,
+        n_lstm_steps=n_lstm_steps,
+        n_words=n_words)
+
 dictionary = pd.read_pickle(dictionary_path)
 images, captions = get_caption_data(annotation_path, flickr_image_path)
+
+caption_generator.build_model()
