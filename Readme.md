@@ -1,22 +1,14 @@
-#NeuralTalk - Theano Ver.
+# Neural Caption Generator
 
-작성자: 김택수
+* Implementation of "Show and Tell" http://arxiv.org/abs/1411.4555
+ * Andrej Karpathy의 NeuralTalk 참고함.
 
-NeuralTalk 프로젝트를 theano 버전으로 바꿈.
+* flickr30k 데이터 필요.
 
-다른건 오리지날 NeuralTalk과 동일. 
-
-### 추가된 파일들:
-* theano_driver.py, 
-* theano_driver_minibatch.py 
-* theano_test.py
-* config.py
-* util.py
+* make_flickr_dataset.py : 단어 dictionary 생성
+* model_tensorflow.py : TensorFlow 버전
+* model_theano.py : Theano 버전
 
 #### 사용방법
-* config.py 적당히 바꿔주기
-* Train: theano_driver_minibatch.py에서 train()
-* Test: theano_test.py에서 test_main()
+* Train: model_theano.py 또는 model_tensorflow.py 에서 train()
 
-## License
-BSD license.
