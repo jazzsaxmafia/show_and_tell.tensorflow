@@ -45,7 +45,7 @@ class Caption_Generator():
 
         image = tf.placeholder(tf.float32, [self.batch_size, self.dim_image])
         sentence = tf.placeholder(tf.int32, [self.batch_size, self.n_lstm_steps])
-        mask = tf.placeholder(tf.float32, [self.batch_size, self.n_lstm_steps+1])
+        mask = tf.placeholder(tf.float32, [self.batch_size, self.n_lstm_steps])
 
         image_emb = tf.matmul(image, self.encode_img_W) + self.encode_img_b # (batch_size, dim_hidden)
         image_emb = tf.expand_dims(image_emb, dim=1) # 이미지와 sentence가 차원이 달라서 더미 차원 추가해줘야함.
@@ -53,11 +53,12 @@ class Caption_Generator():
         with tf.device("/cpu:0"):
             sentence_emb = tf.nn.embedding_lookup(self.Wemb, sentence)
 
+        sentence_emb = tf.concat(concat_dim=1, values=[image_emb, sentence_emb])
         state = tf.zeros([self.batch_size, self.lstm.state_size])
 
         loss = 0.0
         with tf.variable_scope("RNN"):
-            for i in range(self.n_lstm_steps):
+            for i in range(self.n_lstm_steps): # maxlen + 1
                 if i > 0 : tf.get_variable_scope().reuse_variables()
                 labels = tf.expand_dims(sentence[:, i], 1) # (batch_size)
                 indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
@@ -122,7 +123,7 @@ dim_hidden = 512
 dim_image = 4096
 batch_size = 100
 
-learning_rate = 0.001
+#learning_rate = 0.001
 n_epochs = 1000
 ###############################################################
 #################### 잡다한 Parameters ########################
@@ -135,8 +136,15 @@ dictionary_path = os.path.join(data_path, 'dictionary.pkl')
 
 def train():
 
+    learning_rate = 0.001
     dictionary = pd.read_pickle(dictionary_path)
     feats, captions = get_caption_data(annotation_path, feat_path)
+
+    index = np.arange(len(feats))
+    np.random.shuffle(index)
+
+    feats = feats[index]
+    captions = captions[index]
 
     sess = tf.InteractiveSession()
     maxlen = np.max( map(lambda x: len(x.split(' ')), captions) )
@@ -145,17 +153,17 @@ def train():
             dim_hidden=dim_hidden,
             dim_embed=dim_embed,
             batch_size=batch_size,
-            n_lstm_steps=maxlen,
+            n_lstm_steps=maxlen+1,
             n_words=n_words)
 
     loss, image, sentence, mask = caption_generator.build_model()
 
-    saver = tf.train.Saver()
-    train_op = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
+    saver = tf.train.Saver(max_to_keep=0)
     tf.initialize_all_variables().run()
 
     step = 0
     for epoch in range(n_epochs):
+        train_op = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
         for start, end in zip( \
                 range(0, len(feats), batch_size),
                 range(batch_size, len(feats), batch_size)
@@ -167,8 +175,8 @@ def train():
             current_caption_ind = map(lambda cap: map(lambda word: dictionary[word] if word in dictionary else 1, \
                     cap.lower().split(' ')[:-1]), current_captions)
 
-            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen)
-            current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]+1))
+            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
+            current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
             nonzeros = np.array( map(lambda x: (x != 0).sum(), current_caption_matrix ))
 
             for ind, row in enumerate(current_mask_matrix):
@@ -183,11 +191,11 @@ def train():
             print "Current Cost: ", loss_value
             step += 1
 
-
         print "Epoch ", epoch, " is done. Saving the model ... "
-        saver.save(sess, os.path.join(model_path, str(epoch)), global_step=epoch)
+        saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
+        learning_rate *= 0.95
 
-def test(test_feat='./data/test_feat.npy', model_path='./models/model-100', maxlen=30):
+def test(test_feat='./data/test_feat.npy', model_path='./models/model-16', maxlen=30):
 
     dictionary = pd.read_pickle(dictionary_path)
     inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
