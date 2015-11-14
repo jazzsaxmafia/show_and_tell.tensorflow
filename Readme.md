@@ -12,4 +12,6 @@
 * Flickr30k Dataset Download
 * Flicker30k 이미지에 대한 VGG feature 추출 (별도로 해야 함)
 * make_flickr_dataset.py 이용해 dictionary 생성
-* Train: model_theano.py 또는 model_tensorflow.py 에서 train()
+* Train: model_tensorflow.py 에서 train()
+* Test: model_tensorflow.py에서 test(). 
+ * 테스트 이미지의 VGG FC7 feature, 저장된 모델 path
