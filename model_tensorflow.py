@@ -4,10 +4,12 @@ import ipdb
 import tensorflow as tf
 import numpy as np
 import pandas as pd
+import cPickle
 
 from tensorflow.models.rnn import rnn_cell
 import tensorflow.python.platform
 from keras.preprocessing import sequence
+from cnn_util import *
 
 class Caption_Generator():
     def init_weight(self, dim_in, dim_out, name=None, stddev=0.1):
@@ -78,11 +80,11 @@ class Caption_Generator():
         loss = loss / tf.reduce_sum(mask)
         return loss, image, sentence, mask
 
-    def generate_caption(self, maxlen):
-        image = tf.placeholder(tf.float32, [self.dim_image])
+    def build_generator(self, maxlen):
+        image = tf.placeholder(tf.float32, [1, self.dim_image])
         image_emb = tf.matmul(image, self.encode_img_W) + self.encode_img_b
 
-        state = tf.zeros([self.lstm.state_size])
+        state = tf.zeros([1, self.lstm.state_size])
         last_word = image_emb # 첫 단어 대신 이미지
         generated_words = []
 
@@ -96,14 +98,14 @@ class Caption_Generator():
                 logits = tf.tanh(logits)
 
                 logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
-                max_prob_word = tf.argmax(logit_words)
+                max_prob_word = tf.argmax(logit_words, 1)
 
                 with tf.device("/cpu:0"):
-                    last_word = tf.nn.embedding_loop(self.Wemb, max_prob_word)
+                    last_word = tf.nn.embedding_lookup(self.Wemb, max_prob_word)
 
                 generated_words.append(max_prob_word)
 
-        return generated_words
+        return image, generated_words
 
 def get_caption_data(annotation_path, feat_path):
      feats = np.load(feat_path)
@@ -112,22 +114,26 @@ def get_caption_data(annotation_path, feat_path):
 
      return feats, captions
 
+################### 학습 관련 Parameters #####################
+n_words = 10000
+
+dim_embed = 512
+dim_hidden = 512
+dim_image = 4096
+batch_size = 100
+
+learning_rate = 0.001
+n_epochs = 1000
+###############################################################
+#################### 잡다한 Parameters ########################
+model_path = './models'
+data_path = './data'
+feat_path = './data/feats.npy'
+annotation_path = os.path.join(data_path, 'results_20130124.token')
+dictionary_path = os.path.join(data_path, 'dictionary.pkl')
+################################################################
+
 def train():
-    n_words = 10000
-
-    dim_embed = 512
-    dim_hidden = 512
-    dim_image = 4096
-    batch_size = 100
-
-    learning_rate = 0.001
-    n_epochs = 1000
-
-    model_path = './models'
-    data_path = './data'
-    feat_path = './data/feats.npy'
-    annotation_path = os.path.join(data_path, 'results_20130124.token')
-    dictionary_path = os.path.join(data_path, 'dictionary.pkl')
 
     dictionary = pd.read_pickle(dictionary_path)
     feats, captions = get_caption_data(annotation_path, feat_path)
@@ -146,9 +152,9 @@ def train():
 
     saver = tf.train.Saver()
     train_op = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
-
     tf.initialize_all_variables().run()
 
+    step = 0
     for epoch in range(n_epochs):
         for start, end in zip( \
                 range(0, len(feats), batch_size),
@@ -175,10 +181,36 @@ def train():
                 })
 
             print "Current Cost: ", loss_value
+            step += 1
+
 
         print "Epoch ", epoch, " is done. Saving the model ... "
-        saver.save(sess, model_path)
-        with open(os.path.join(model_path, 'epoch_'+str(epoch)+'.pickle'), 'w') as f:
-            cPickle.dump(caption_generator, f)
+        saver.save(sess, os.path.join(model_path, str(epoch)), global_step=epoch)
 
+def test(test_feat='./data/test_feat.npy', model_path='./models/model-100', maxlen=30):
+
+    dictionary = pd.read_pickle(dictionary_path)
+    inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
+    feat = [np.load(test_feat)]
+    sess = tf.InteractiveSession()
+    caption_generator = Caption_Generator(
+           dim_image=dim_image,
+           dim_hidden=dim_hidden,
+           dim_embed=dim_embed,
+           batch_size=batch_size,
+           n_lstm_steps=maxlen,
+           n_words=n_words)
+
+    image, generated_words = caption_generator.build_generator(maxlen=maxlen)
+    # 이 부분이 존나 중요함. 계속 caption_generator를 가져온 뒤 바로 restore를 했었는데,
+    # TensorFlow의 LSTM은 call을 한 뒤에 weight가 만들어지기 때문에 build_generator보다 뒤쪽에서 restore를 해야 함.
+    saver = tf.train.Saver()
+    saver.restore(sess, model_path)
+
+    generated_word_index= sess.run(generated_words, feed_dict={image:feat})
+    generated_word_index = np.hstack(generated_word_index)
+
+    generated_sentence = inverse_dictionary[generated_word_index]
+
+    ipdb.set_trace()
 
