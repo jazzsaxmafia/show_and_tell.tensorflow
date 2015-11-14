@@ -14,4 +14,4 @@
 * make_flickr_dataset.py 이용해 dictionary 생성
 * Train: model_tensorflow.py 에서 train()
 * Test: model_tensorflow.py에서 test(). 
- * parameters:테스트 이미지의 VGG FC7 feature, 저장된 모델 path
+ * parameters: 테스트 이미지의 VGG FC7 feature, 학습된 모델 path
