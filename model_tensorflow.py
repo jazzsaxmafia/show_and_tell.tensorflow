@@ -31,6 +31,8 @@ class Caption_Generator():
         with tf.device("/cpu:0"):
             self.Wemb = tf.Variable(tf.random_uniform([n_words, dim_embed], -1.0, 1.0), name='Wemb')
 
+        self.bemb = self.init_bias(dim_embed, name='bemb')
+
         self.lstm = rnn_cell.BasicLSTMCell(dim_hidden)
 
         self.encode_img_W = self.init_weight(dim_image, dim_hidden, name='encode_img_W')
@@ -53,6 +55,8 @@ class Caption_Generator():
 
         with tf.device("/cpu:0"):
             sentence_emb = tf.nn.embedding_lookup(self.Wemb, sentence)
+
+        sentence_emb += self.bemb
 
         sentence_emb = tf.concat(concat_dim=1, values=[image_emb, sentence_emb])
         sentence_emb = tf.nn.dropout(sentence_emb, 0.5)
@@ -89,23 +93,28 @@ class Caption_Generator():
         image_emb = tf.matmul(image, self.encode_img_W) + self.encode_img_b
 
         state = tf.zeros([1, self.lstm.state_size])
-        last_word = image_emb # 첫 단어 대신 이미지
+        #last_word = image_emb # 첫 단어 대신 이미지
         generated_words = []
 
         with tf.variable_scope("RNN"):
+            output, state = self.lstm(image_emb, state)
+            last_word = tf.nn.embedding_lookup(self.Wemb, [2]) + self.bemb
+
             for i in range(maxlen):
-                if i > 0: tf.get_variable_scope().reuse_variables()
+                tf.get_variable_scope().reuse_variables()
 
                 output, state = self.lstm(last_word, state)
 
                 logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
-                logits = tf.relu(logits)
+                logits = tf.nn.relu(logits)
 
                 logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
                 max_prob_word = tf.argmax(logit_words, 1)
 
                 with tf.device("/cpu:0"):
                     last_word = tf.nn.embedding_lookup(self.Wemb, max_prob_word)
+
+                last_word += self.bemb
 
                 generated_words.append(max_prob_word)
 
@@ -120,9 +129,11 @@ class Caption_Generator():
         with tf.variable_scope("RNN"):
             output, state = self.lstm(image_emb, state)
             tf.get_variable_scope().reuse_variables()
-            output, state = self.lstm( tf.nn.embedding_lookup(self.Wemb, [2]), state ) # 이미지 넣고 그다음 2(#START#) 넣고 시작
+
+            starting_emb = tf.nn.embedding_lookup(self.Wemb, [2]) + self.bemb
+            output, state = self.lstm( starting_emb, state ) # 이미지 넣고 그다음 2(#START#) 넣고 시작
             logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
-            logits = tf.relu(logits)
+            logits = tf.nn.relu(logits)
 
             logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
 
@@ -137,11 +148,13 @@ class Caption_Generator():
         with tf.device("/cpu:0"):
             current_emb = tf.nn.embedding_lookup(self.Wemb, current_word)
 
+        current_emb += self.bemb
+
         with tf.variable_scope("RNN"):
             tf.get_variable_scope().reuse_variables()
             output, state = self.lstm(current_emb, last_state)
             logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
-            logits = tf.relu(logits)
+            logits = tf.nn.relu(logits)
 
             logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
 
@@ -219,8 +232,9 @@ def train():
                     cap.lower().split(' ')[:-1]), current_captions)
 
             current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
-            current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 2), current_caption_matrix] )
-            # padding을 maxlen+1만큼 해주는 건 마지막에 0를 박기 위해서임.
+            current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 2), current_caption_matrix] ).astype(int)
+
+            # padding을 maxlen+1만큼 해주는 건 마지막에 0을 박기 위해서임.
 
             current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
             nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
@@ -242,7 +256,7 @@ def train():
         saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
         learning_rate *= 0.95
 
-def test(test_feat='./data/test_feat2.npy', model_path='./models/model-31', maxlen=30):
+def test(test_feat='./data/test_feat2.npy', model_path='./models/model-77', maxlen=30): # Naive greedy search
 
     dictionary = pd.read_pickle(dictionary_path)
     inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
@@ -269,7 +283,7 @@ def test(test_feat='./data/test_feat2.npy', model_path='./models/model-31', maxl
 
     ipdb.set_trace()
 
-def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-31', maxlen=30):
+def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-77', maxlen=30): # Beam Search
     k = 8
 
     dictionary = pd.read_pickle(dictionary_path)
@@ -292,6 +306,8 @@ def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-31', ma
 
     last_state_val = sess.run(state, feed_dict={image:feat}).repeat(k, axis=0)
     top_k_words_val = sess.run(top_k_words, feed_dict={image:feat})[0]
+
+    ipdb.set_trace()
 
     last_sents = top_k_words_val#.repeat(k)[:,None]
 
