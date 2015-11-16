@@ -171,7 +171,7 @@ def get_caption_data(annotation_path, feat_path):
      return feats, captions
 
 ################### 학습 관련 Parameters #####################
-n_words = 10000
+n_words = 3000
 
 dim_embed = 512
 dim_hidden = 512
