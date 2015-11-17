@@ -233,7 +233,7 @@ def train():
                     cap.lower().split(' ')[:-1]), current_captions)
 
             current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
-            current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 2), current_caption_matrix] ).astype(int)
+            current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 0), current_caption_matrix] ).astype(int)
 
             # padding을 maxlen+1만큼 해주는 건 마지막에 0을 박기 위해서임.
 
