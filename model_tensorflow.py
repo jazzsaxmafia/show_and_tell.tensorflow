@@ -74,16 +74,17 @@ class Caption_Generator():
 
                 output, state = self.lstm(sentence_emb[:,i,:], state) # (batch_size, dim_hidden)
 
-                logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b # (batch_size, dim_embed)
-                logits = tf.nn.relu(logits)
-                logits = tf.nn.dropout(logits, 0.5)
+                if i > 0: # 이미지 다음 바로 나오는건 #START# 임. 이건 무시.
+                    logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b # (batch_size, dim_embed)
+                    logits = tf.nn.relu(logits)
+                    logits = tf.nn.dropout(logits, 0.5)
 
-                logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b # (batch_size, n_words)
-                cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
-                cross_entropy = cross_entropy * mask[:,i]#tf.expand_dims(mask, 1)
+                    logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b # (batch_size, n_words)
+                    cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
+                    cross_entropy = cross_entropy * mask[:,i]#tf.expand_dims(mask, 1)
 
-                current_loss = tf.reduce_sum(cross_entropy)
-                loss = loss + current_loss
+                    current_loss = tf.reduce_sum(cross_entropy)
+                    loss = loss + current_loss
 
         loss = loss / tf.reduce_sum(mask)
         return loss, image, sentence, mask
@@ -98,7 +99,7 @@ class Caption_Generator():
 
         with tf.variable_scope("RNN"):
             output, state = self.lstm(image_emb, state)
-            last_word = tf.nn.embedding_lookup(self.Wemb, [2]) + self.bemb
+            last_word = tf.nn.embedding_lookup(self.Wemb, [0]) + self.bemb
 
             for i in range(maxlen):
                 tf.get_variable_scope().reuse_variables()
@@ -130,7 +131,7 @@ class Caption_Generator():
             output, state = self.lstm(image_emb, state)
             tf.get_variable_scope().reuse_variables()
 
-            starting_emb = tf.nn.embedding_lookup(self.Wemb, [2]) + self.bemb
+            starting_emb = tf.nn.embedding_lookup(self.Wemb, [0]) + self.bemb
             output, state = self.lstm( starting_emb, state ) # 이미지 넣고 그다음 2(#START#) 넣고 시작
             logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
             logits = tf.nn.relu(logits)
@@ -138,9 +139,9 @@ class Caption_Generator():
             logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
 
             softmax = tf.nn.softmax(logit_words)
-            top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
+            #top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
 
-        return image, state, output, top_k_indices, top_k_scores
+        return image, state, output, softmax # top_k_indices, top_k_scores
 
     def generate_from_word(self, k):
         last_state = tf.placeholder(tf.float32, [1, self.dim_hidden*2])
@@ -159,9 +160,9 @@ class Caption_Generator():
             logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
 
             softmax = tf.nn.softmax(logit_words)
-            top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
+            #top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
 
-        return last_state, current_word, state, output, top_k_indices, top_k_scores
+        return last_state, current_word, state, output, softmax#top_k_indices, top_k_scores
 
 def get_caption_data(annotation_path, feat_path):
      feats = np.load(feat_path)
@@ -283,7 +284,7 @@ def test(test_feat='./data/test_feat2.npy', model_path='./models/model-77', maxl
 
     ipdb.set_trace()
 
-def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-77', maxlen=30): # Beam Search
+def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-44', maxlen=30): # Beam Search
     k = 8
 
     dictionary = pd.read_pickle(dictionary_path)
@@ -298,66 +299,82 @@ def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-77', ma
            n_lstm_steps=maxlen,
            n_words=n_words)
 
-    image, state, output, top_k_words, top_k_scores = caption_generator.generate_from_image(k=k)
-    last_state, current_word, state_, output_, top_k_words_, top_k_scores_ = caption_generator.generate_from_word(k=k)
+    #image, state, output, top_k_words, top_k_scores = caption_generator.generate_from_image(k=k)
+    image, state, output, first_word_prob = caption_generator.generate_from_image(k=k)
+    #last_state, current_word, state_, output_, top_k_words_, top_k_scores_ = caption_generator.generate_from_word(k=k)
+    last_state, current_word, state_, output_, word_prob = caption_generator.generate_from_word(k=k)
 
     saver = tf.train.Saver()
     saver.restore(sess, model_path)
 
     last_state_val = sess.run(state, feed_dict={image:feat}).repeat(k, axis=0)
-    top_k_words_val = sess.run(top_k_words, feed_dict={image:feat})[0]
+    first_word_prob_val = sess.run(first_word_prob, feed_dict={image:feat})[0]
 
-    ipdb.set_trace()
+    top_k_index = np.argsort(first_word_prob_val)[::-1]#[:k]
+    top_k_prob = np.log(first_word_prob_val[top_k_index])
 
-    last_sents = top_k_words_val#.repeat(k)[:,None]
+    nonzero_index = np.where(top_k_index != 0)[0] # #START#, UNK는 제외
+    top_k_index = top_k_index[ nonzero_index ][:k]
+    top_k_prob = top_k_prob[ top_k_index ]
+
+    #last_sents = top_k_words_val#.repeat(k)[:,None]
+    prob_list = top_k_prob
+    last_sents = top_k_index#.repeat(k)[:,None]
+
+    final_candidate = []
 
     for i in range(maxlen):
 
         all_state = []
-        all_words = []
-        all_scores = []
-        last_sents = last_sents.repeat(k, axis=0)
+
         if len(last_sents.shape ) == 1:
             last_sents = last_sents[:,None]
 
+        all_probs = []
+        state_list = []
         for k_ in range(k): # 매 번 k*k개의 sub-sentence가 생성됨. 이 중에서 k개를 골라야 함.
             current_state_val = sess.run(state_, feed_dict={
                 last_state:[last_state_val[k_]],
-                current_word: [top_k_words_val[k_]]
+                current_word: [top_k_index[k_]]
                 })
 
-            current_top_k_words_val = sess.run(top_k_words_, feed_dict={
+            state_list.append(current_state_val)
+
+            word_prob_val = np.log(sess.run(word_prob, feed_dict={
                 last_state:[last_state_val[k_]],
-                current_word: [top_k_words_val[k_]]
-                })
+                current_word: [top_k_index[k_]]
+                })[0])
 
-            current_top_k_scores_val = sess.run(top_k_scores_, feed_dict={
-                last_state:[last_state_val[k_]],
-                current_word: [top_k_words_val[k_]]
-                })
-
+            acc_probs = word_prob_val + prob_list[k_]
             all_state.append(current_state_val)
-            all_words.append(current_top_k_words_val[0])
-            all_scores.append(current_top_k_scores_val[0])
+            all_probs.append(acc_probs)
 
-        all_state = np.vstack(all_state)
-        all_words = np.hstack(all_words)
-        all_scores = np.hstack(all_scores)
+        all_probs = np.hstack(all_probs)
+        state_list = np.vstack(state_list)
+        ipdb.set_trace()
 
-        current_top_k_scores_ind = np.hstack(all_scores).argsort()[::-1][:k]
-        last_top_k_subsents = last_sents[current_top_k_scores_ind]
-        current_top_k_subsents = all_words[current_top_k_scores_ind]
+        top_k_index_global = all_probs.argsort()[::-1][:k]
+        prob_list = all_probs[top_k_index_global]
 
-        last_state_val = all_state[current_top_k_scores_ind / k]
+        top_k_k = top_k_index_global / n_words
+        top_k_index = top_k_index_global % n_words
 
-        last_sents = map(lambda (x,y): x.tolist() + [y], zip(last_top_k_subsents, current_top_k_subsents))
-        last_sents = np.vstack(last_sents)
+        dead_k = np.where( top_k_index == 0 )[0]
+        n_dead_k = len(dead_k)
+
+        last_sents = np.concatenate([last_sents[top_k_k], top_k_index[:,None]], 1)
+        last_state_val = state_list[top_k_k]
 
         ipdb.set_trace()
 
+        for dead in last_sents[dead_k]:
+            final_candidate.append(dead)
 
+        last_sents = np.delete(last_sents, dead_k, 0)
+        prob_list = np.delete(prob_list, dead_k, 0)
+        last_state_val = np.delete(last_state_val, dead_k, 0)
+        top_k_index = np.delete(top_k_index, dead_k, 0)
 
-
-
+        k -= n_dead_k
 
 

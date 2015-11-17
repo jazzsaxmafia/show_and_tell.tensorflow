@@ -25,13 +25,12 @@ if not os.path.exists(feat_path):
 
 captions = annotations['caption'].values
 
-vectorizer = CountVectorizer(max_features=3000 - 3, token_pattern='\\b\\w+\\b').fit(captions)
+vectorizer = CountVectorizer(max_features=3000 - 2, token_pattern='\\b\\w+\\b').fit(captions)
 dictionary = vectorizer.vocabulary_
-dictionary = pd.Series(dictionary) + 3
+dictionary = pd.Series(dictionary) + 2
 
-dictionary['#END#'] = 0
+dictionary['#START#'] = 0
 dictionary['UNK'] = 1
-dictionary['#START#'] = 2
 
 with open('./data/dictionary.pkl', 'wb') as f:
     cPickle.dump(dictionary, f)
