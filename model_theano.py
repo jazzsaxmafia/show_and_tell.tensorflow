@@ -12,45 +12,40 @@ import cPickle
 from keras import initializations
 from keras.preprocessing import sequence
 
-from taeksoo.cnn_util import CNN
-
 class Caption_Generator():
-    def __init__(self, n_words, dim_embed, dim_hidden, dim_image):
+    def __init__(self, n_words, dim_embed, dim_hidden, dim_image, bias_init_vector=None):
         self.n_words = n_words
         self.dim_embed = dim_embed
         self.dim_hidden = dim_hidden
         self.dim_image = dim_image
 
-        self.Wemb = initializations.uniform((n_words, dim_embed))
+        self.Wemb = initializations.uniform((n_words, dim_embed), scale=0.1)
+        self.bemb = initializations.zero((dim_embed))
 
-        self.lstm_W = initializations.uniform((dim_embed, dim_hidden*4))
-        self.lstm_U = initializations.uniform((dim_hidden, dim_hidden*4))
-        self.lstm_b = initializations.zero((dim_hidden*4))
+        self.lstm_W = initializations.uniform((1 + dim_embed + dim_hidden, dim_hidden*4), scale=0.1)
 
-        self.encode_img_W = initializations.uniform((dim_image, dim_hidden))
+        self.encode_img_W = initializations.uniform((dim_image, dim_hidden), scale=0.1)
         self.encode_img_b = initializations.zero((dim_hidden))
 
-        self.hidden_emb_W = initializations.uniform((dim_hidden, dim_embed))
-        self.hidden_emb_b = initializations.zero((dim_embed))
-
-        self.emb_word_W = initializations.uniform((dim_embed, n_words))
-        self.emb_word_b = initializations.uniform((n_words))
+        self.emb_word_W = initializations.uniform((dim_hidden, n_words), scale=0.1)
+        if bias_init_vector is None:
+            self.emb_word_b = initializations.uniform((n_words))
+        else:
+            self.emb_word_b = theano.shared(bias_init_vector, borrow=True)
 
         self.params = [
-                self.Wemb,
-                self.lstm_W, self.lstm_U, self.lstm_b,
+                self.Wemb, self.bemb,
+                self.lstm_W,
                 self.encode_img_W, self.encode_img_b,
-                self.hidden_emb_W, self.hidden_emb_b,
                 self.emb_word_W, self.emb_word_b
             ]
 
-    def forward_lstm(self, x, mask):
+    def forward_lstm(self, x): # x: (n_timestep, n_samples, dim_embed)
 
-        def _step(m_tm_1, x_t, h_tm_1, c_tm_1):
-            lstm_preactive = \
-                T.dot(h_tm_1, self.lstm_U) + \
-                T.dot(x_t, self.lstm_W) + \
-                self.lstm_b
+        def _step(x_t, h_tm_1, c_tm_1):
+            ones = T.ones([x_t.shape[0], 1])
+            input_concat = T.concatenate([ones, x_t, h_tm_1], 1)
+            lstm_preactive = T.dot(input_concat, self.lstm_W)
 
             i = T.nnet.sigmoid(lstm_preactive[:, 0*self.dim_hidden:1*self.dim_hidden])
             f = T.nnet.sigmoid(lstm_preactive[:, 1*self.dim_hidden:2*self.dim_hidden])
@@ -58,10 +53,7 @@ class Caption_Generator():
             c = T.tanh(lstm_preactive[:, 3*self.dim_hidden:4*self.dim_hidden])
 
             c = f*c_tm_1 + i*c
-            c = m_tm_1[:,None]*c + (1.-m_tm_1)[:,None]*c_tm_1
-
             h = o*T.tanh(c)
-            h = m_tm_1[:,None]*h + (1.-m_tm_1)[:,None]*h_tm_1
 
             return [h,c]
 
@@ -70,12 +62,58 @@ class Caption_Generator():
 
         rval, updates = theano.scan(
                 fn=_step,
-                sequences=[mask,x],
+                sequences=[x],
                 outputs_info=[h0,c0]
                 )
 
         h_list, c_list = rval
         return h_list
+
+    def generate_lstm(self, x, maxlen):
+        h0 = T.alloc(0., x.shape[0], self.dim_hidden)
+        c0 = T.alloc(0., x.shape[0], self.dim_hidden)
+
+        ones = T.ones([x.shape[0], 1])
+        input_concat = T.concatenate([ones, x, h0], 1)
+        lstm_preactive = T.dot(input_concat, self.lstm_W)
+
+        i = T.nnet.sigmoid(lstm_preactive[:, 0*self.dim_hidden:1*self.dim_hidden])
+        f = T.nnet.sigmoid(lstm_preactive[:, 1*self.dim_hidden:2*self.dim_hidden])
+        o = T.nnet.sigmoid(lstm_preactive[:, 2*self.dim_hidden:3*self.dim_hidden])
+        c = T.tanh(lstm_preactive[:, 3*self.dim_hidden:4*self.dim_hidden])
+
+        c = f*c0 + i*c
+        h = o*T.tanh(c)
+
+        start_tag = self.Wemb[0][None,:] + self.bemb
+
+        def _step(x_t, h_tm_1, c_tm_1):
+            ones = T.ones([x_t.shape[0], 1])
+            input_concat = T.concatenate([ones, x_t, h_tm_1], 1)
+            lstm_preactive = T.dot(input_concat, self.lstm_W)
+
+            i = T.nnet.sigmoid(lstm_preactive[:, 0*self.dim_hidden:1*self.dim_hidden])
+            f = T.nnet.sigmoid(lstm_preactive[:, 1*self.dim_hidden:2*self.dim_hidden])
+            o = T.nnet.sigmoid(lstm_preactive[:, 2*self.dim_hidden:3*self.dim_hidden])
+            c = T.tanh(lstm_preactive[:, 3*self.dim_hidden:4*self.dim_hidden])
+
+            c = f*c_tm_1 + i*c
+            h = o*T.tanh(c)
+
+            output_word = T.dot(h, self.emb_word_W) + self.emb_word_b #(1, 1, n_words)
+            max_index = output_word.flatten().argmax()
+
+            next_x = self.Wemb[max_index][None,:] + self.bemb
+
+            return [h,c, next_x]
+
+        rval, updates = theano.scan(
+                fn=_step,
+                outputs_info=[h,c,start_tag],
+                maxlen=maxlen)
+
+        h_list, c_list, x_list = rval
+        return x_list
 
     def build_model(self):
         image = T.matrix('image')
@@ -83,18 +121,14 @@ class Caption_Generator():
         mask = T.matrix('mask')
 
         n_samples, n_timestep = sentence.shape
-        emb_dimshuffle = self.Wemb[sentence.flatten()].reshape((n_timestep, n_samples, -1))
-        mask_dimshuffle = mask.dimshuffle(1,0)
+        emb_dimshuffle = self.Wemb[sentence.flatten()].reshape((n_timestep, n_samples, -1)) + self.bemb
 
         image_enc = T.dot(image, self.encode_img_W) + self.encode_img_b # (n_samples, dim_hidden)
-
         X = T.concatenate([image_enc[None,:,:], emb_dimshuffle], axis=0) # (n_timestep + 1, n_samples, dim_hidden)
-        X = X[:-1] # 마지막 단어 빼고
 
-        h_list = self.forward_lstm(X, mask_dimshuffle) # (n_timestep, n_samples, dim_hidden)
+        h_list = self.forward_lstm(X)#, mask_dimshuffle) # (n_timestep, n_samples, dim_hidden)
 
-        output_emb = T.dot(h_list, self.hidden_emb_W) + self.hidden_emb_b # (n_timestep, n_samples, dim_embed)
-        output_word = T.tanh(T.dot(output_emb, self.emb_word_W) + self.emb_word_b) #(n_timestep, n_samples, n_words)
+        output_word = T.dot(h_list, self.emb_word_W) + self.emb_word_b #(n_timestep, n_samples, n_words)
         output_word = output_word.dimshuffle(1,0,2) # (n_samples, n_timestep, n_words)
 
         output_word_shape = output_word.shape
@@ -106,89 +140,115 @@ class Caption_Generator():
         cost = -T.log(probs_flat[T.arange(sentence_flat.shape[0])*probs.shape[1] + sentence_flat])
 
         cost = cost.reshape((sentence.shape[0], sentence.shape[1]))
-        masked_cost = cost * mask
+        masked_cost = (cost * mask)[:, 1:]
 
-        cost_mean = (masked_cost).sum() / mask.sum()
+        cost_mean = (masked_cost).sum() / mask[:,1:].sum()
 
         return image, sentence, mask, masked_cost, cost_mean, output_word, h_list
 
-def RMSprop(cost, params, lr=0.001, rho=0.9, epsilon=1e-6):
+    def build_generator(self, maxlen):
+        image = T.matrix('image')
+        image_enc = T.dot(image, self.encode_img_W) + self.encode_img_b
+
+        generated_sents = self.generate_lstm(image_enc)
+        return theano.function(inputs=[image], outputs=generated_sents, allow_input_downcast=True)
+
+def RMSprop(cost, params, lr=0.001, rho=0.999, epsilon=1e-8, grad_clip=2.):
     grads = T.grad(cost=cost, wrt=params)
     updates = []
+
+    #grads = T.clip(grads, -grad_clip, grad_clip)
 
     for p, g in zip(params, grads):
         acc = theano.shared(p.get_value() * 0.)
         acc_new = rho * acc + (1 - rho) * g ** 2
         gradient_scaling = T.sqrt(acc_new + epsilon)
-        g = g / gradient_scaling
+        g = T.clip(g, -grad_clip,grad_clip) / gradient_scaling
         updates.append((acc, acc_new))
         updates.append((p, p - lr * g))
 
     return updates
 
-def get_caption_data(annotation_path, image_path):
+def get_caption_data(annotation_path, feat_path):
+    feats = np.load(feat_path)
     annotations = pd.read_table(annotation_path, sep='\t', header=None, names=['image', 'caption'])
-    annotations['image'] = annotations['image'].map(lambda x: os.path.join(image_path, x.split('#')[0]))
-    images = annotations['image'].values
     captions = annotations['caption'].values
 
-    return images, captions
+    return feats, captions
+
+def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
+       # count up all word counts so that we can threshold
+       # this shouldnt be too expensive of an operation
+       print 'preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, )
+       word_counts = {}
+       nsents = 0
+       for sent in sentence_iterator:
+         nsents += 1
+         for w in sent.lower().split(' '):
+           word_counts[w] = word_counts.get(w, 0) + 1
+       vocab = [w for w in word_counts if word_counts[w] >= word_count_threshold]
+       print 'filtered words from %d to %d' % (len(word_counts), len(vocab))
+
+       # with K distinct words:
+       # - there are K+1 possible inputs (START token and all the words)
+       # - there are K+1 possible outputs (END token and all the words)
+       # we use ixtoword to take predicted indeces and map them to words for output visualization
+       # we use wordtoix to take raw words and get their index in word vector matrix
+       ixtoword = {}
+       ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
+       wordtoix = {}
+       wordtoix['#START#'] = 0 # make first vector be the start token
+       ix = 1
+       for w in vocab:
+         wordtoix[w] = ix
+         ixtoword[ix] = w
+         ix += 1
+       # compute bias vector, which is related to the log probability of the distribution
+       # of the labels (words) and how often they occur. We will use this vector to initialize
+       # the decoder weights, so that the loss function doesnt show a huge increase in performance
+       # very quickly (which is just the network learning this anyway, for the most part). This makes
+       # the visualizations of the cost function nicer because it doesn't look like a hockey stick.
+       # for example on Flickr8K, doing this brings down initial perplexity from ~2500 to ~170.
+       word_counts['.'] = nsents
+       bias_init_vector = np.array([1.0*word_counts[ixtoword[i]] for i in ixtoword])
+       bias_init_vector /= np.sum(bias_init_vector) # normalize to frequencies
+       bias_init_vector = np.log(bias_init_vector)
+       bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
+       return wordtoix, ixtoword, bias_init_vector
+
+
+#################### 잡다한 Parameters ########################
+model_path = './models'
+data_path = './data'
+feat_path = './data/feats.npy'
+annotation_path = os.path.join(data_path, 'results_20130124.token')
+dictionary_path = os.path.join(data_path, 'dictionary.pkl')
+################################################################
+
 
 def train():
     n_epochs = 100
     batch_size = 128
-    n_words = 10000
 
-    dim_embed = 512
-    dim_hidden = 512
+    dim_embed = 256
+    dim_hidden = 256
     dim_image = 4096
 
     learning_rate = 0.001
 
-    vgg_model = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers.caffemodel'
-    vgg_deploy = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers_deploy.prototxt'
+    feats, captions = get_caption_data(annotation_path, feat_path)
+    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
-    image_path = '/home/taeksoo/Study/show_attend_and_tell/images/'
-    data_path = '/home/taeksoo/Study/show_attend_and_tell/data/flickr30k'
-    annotation_path = os.path.join(data_path, 'results_20130124.token')
-    flickr_image_path = os.path.join(image_path, 'flickr30k-images')
-    dictionary_path = os.path.join(data_path, 'dictionary.pkl')
+    n_words = len(wordtoix)
 
-    cnn = CNN(
-            deploy=vgg_deploy,
-            model=vgg_model,
-            batch_size=20,
-            width=224,
-            height=224)
-
-    dictionary = pd.read_pickle(dictionary_path)
-    images, captions = get_caption_data(annotation_path, flickr_image_path)
-
-    index = np.arange(len(images))
+    index = np.arange(len(feats))
     np.random.shuffle(index)
 
-    images = images[index]
+    feats = feats[index]
     captions = captions[index]
 
-
-    caption_generator = Caption_Generator(n_words, dim_embed, dim_hidden, dim_image)
-
+    caption_generator = Caption_Generator(n_words, dim_embed, dim_hidden, dim_image, bias_init_vector=bias_init_vector)
     theano_image, theano_sentence, theano_mask, theano_cost_arr, theano_cost, output_word, hid = caption_generator.build_model()
-
-    f_output_word = theano.function(
-            inputs=[theano_image, theano_sentence, theano_mask],
-            outputs=output_word,
-            allow_input_downcast=True)
-
-    f_hid = theano.function(
-            inputs=[theano_image, theano_sentence, theano_mask],
-            outputs=hid,
-            allow_input_downcast=True)
-
-    f_cost = theano.function(
-            inputs=[theano_image, theano_sentence, theano_mask],
-            outputs=theano_cost_arr,
-            allow_input_downcast=True)
 
     for epoch in range(n_epochs):
 
@@ -200,36 +260,32 @@ def train():
                 allow_input_downcast=True)
 
         for start, end in zip(
-                range(0, len(images)+batch_size, batch_size),
-                range(batch_size, len(images)+batch_size, batch_size)
+                range(0, len(feats)+batch_size, batch_size),
+                range(batch_size, len(feats)+batch_size, batch_size)
                 ):
 
-            current_images = images[start:end]
+            current_feats = feats[start:end]
             current_captions = captions[start:end]
 
-            image_train = cnn.get_features(current_images, layers='fc7')
-            current_caption_ind = map(lambda cap: map(lambda word: dictionary[word] if word in dictionary else 1, cap.lower().split(' ')[:-1]), current_captions)
+            current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ')[:-1] if word in wordtoix], current_captions)
 
             maxlen = np.max(map(lambda x: len(x), current_caption_ind)) + 1
 
-            caption_train = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen)
-            mask_train = np.zeros_like(caption_train)
+            current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
+            current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 0), current_caption_matrix] ).astype(int)
 
-            nonzeros = np.array(map(lambda x: (x != 0).sum(), caption_train))
+            current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
+            nonzeros = np.array(map(lambda x: (x != 0).sum()+1, current_caption_matrix))
 
-            for ind, row in enumerate(mask_train):
+            for ind, row in enumerate(current_mask_matrix):
                 row[:nonzeros[ind]+1] = 1
 
-            cost = train_function(image_train, caption_train, mask_train)
+            ipdb.set_trace()
 
-#            output_word = f_output_word(image_train, caption_train, mask_train)
-#            output_hidden = f_hid(image_train, caption_train, mask_train)
-#            cost_arr = f_cost(image_train, caption_train, mask_train)
+            cost = train_function(current_feats, current_caption_matrix, current_mask_matrix)
+
             print cost
 
-        with open('./cv/iter_'+str(epoch)+'.pickle', 'w') as f:
+        with open('./models/theano/iter_'+str(epoch)+'.pickle', 'w') as f:
             cPickle.dump(caption_generator, f)
         learning_rate *= 0.98
-
-
-

@@ -10,6 +10,7 @@ import cPickle
 from tensorflow.models.rnn import rnn_cell
 import tensorflow.python.platform
 from keras.preprocessing import sequence
+from collections import Counter
 from cnn_util import *
 
 class Caption_Generator():
@@ -19,7 +20,7 @@ class Caption_Generator():
     def init_bias(self, dim_out, name=None):
         return tf.Variable(tf.zeros([dim_out]), name=name)
 
-    def __init__(self, dim_image, dim_embed, dim_hidden, batch_size, n_lstm_steps, n_words):
+    def __init__(self, dim_image, dim_embed, dim_hidden, batch_size, n_lstm_steps, n_words, bias_init_vector=None):
 
         self.dim_image = np.int(dim_image)
         self.dim_embed = np.int(dim_embed)
@@ -29,20 +30,20 @@ class Caption_Generator():
         self.n_words = np.int(n_words)
 
         with tf.device("/cpu:0"):
-            self.Wemb = tf.Variable(tf.random_uniform([n_words, dim_embed], -1.0, 1.0), name='Wemb')
+            self.Wemb = tf.Variable(tf.random_uniform([n_words, dim_embed], -0.1, 0.1), name='Wemb')
 
         self.bemb = self.init_bias(dim_embed, name='bemb')
 
         self.lstm = rnn_cell.BasicLSTMCell(dim_hidden)
 
-        self.encode_img_W = self.init_weight(dim_image, dim_hidden, name='encode_img_W')
+        #self.encode_img_W = self.init_weight(dim_image, dim_hidden, name='encode_img_W')
+        self.encode_img_W = tf.Variable(tf.random_uniform([dim_image, dim_hidden], -0.1, 0.1), name='encode_img_W')
         self.encode_img_b = self.init_bias(dim_hidden, name='encode_img_b')
 
-        self.hidden_emb_W = self.init_weight(dim_hidden, dim_embed, name='hidden_emb_W')
-        self.hidden_emb_b = self.init_bias(dim_embed, name='hidden_emb_b')
-
-        self.embed_word_W = self.init_weight(dim_embed, n_words, name='embed_word_W')
+        self.embed_word_W = tf.Variable(tf.random_uniform([dim_hidden, n_words], -0.1, 0.1), name='embed_word_W')
         self.embed_word_b = self.init_bias(n_words, name='embed_word_b')
+        if bias_init_vector is not None:
+            self.embed_word_b.assign(bias_init_vector)
 
     def build_model(self):
 
@@ -75,11 +76,8 @@ class Caption_Generator():
                 output, state = self.lstm(sentence_emb[:,i,:], state) # (batch_size, dim_hidden)
 
                 if i > 0: # 이미지 다음 바로 나오는건 #START# 임. 이건 무시.
-                    logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b # (batch_size, dim_embed)
-                    logits = tf.nn.relu(logits)
-                    logits = tf.nn.dropout(logits, 0.5)
 
-                    logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b # (batch_size, n_words)
+                    logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b # (batch_size, n_words)
                     cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
                     cross_entropy = cross_entropy * mask[:,i]#tf.expand_dims(mask, 1)
 
@@ -106,10 +104,7 @@ class Caption_Generator():
 
                 output, state = self.lstm(last_word, state)
 
-                logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
-                logits = tf.nn.relu(logits)
-
-                logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
+                logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b
                 max_prob_word = tf.argmax(logit_words, 1)
 
                 with tf.device("/cpu:0"):
@@ -133,10 +128,7 @@ class Caption_Generator():
 
             starting_emb = tf.nn.embedding_lookup(self.Wemb, [0]) + self.bemb
             output, state = self.lstm( starting_emb, state ) # 이미지 넣고 그다음 2(#START#) 넣고 시작
-            logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
-            logits = tf.nn.relu(logits)
-
-            logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
+            logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b
 
             softmax = tf.nn.softmax(logit_words)
             #top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
@@ -154,10 +146,7 @@ class Caption_Generator():
         with tf.variable_scope("RNN"):
             tf.get_variable_scope().reuse_variables()
             output, state = self.lstm(current_emb, last_state)
-            logits = tf.matmul(output, self.hidden_emb_W) + self.hidden_emb_b
-            logits = tf.nn.relu(logits)
-
-            logit_words = tf.matmul(logits, self.embed_word_W) + self.embed_word_b
+            logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b
 
             softmax = tf.nn.softmax(logit_words)
             #top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
@@ -171,13 +160,53 @@ def get_caption_data(annotation_path, feat_path):
 
      return feats, captions
 
-################### 학습 관련 Parameters #####################
-n_words = 3000
+def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
+    # count up all word counts so that we can threshold
+    # this shouldnt be too expensive of an operation
+    print 'preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, )
+    word_counts = {}
+    nsents = 0
+    for sent in sentence_iterator:
+      nsents += 1
+      for w in sent.lower().split(' '):
+        word_counts[w] = word_counts.get(w, 0) + 1
+    vocab = [w for w in word_counts if word_counts[w] >= word_count_threshold]
+    print 'filtered words from %d to %d' % (len(word_counts), len(vocab))
 
-dim_embed = 512
-dim_hidden = 512
+    # with K distinct words:
+    # - there are K+1 possible inputs (START token and all the words)
+    # - there are K+1 possible outputs (END token and all the words)
+    # we use ixtoword to take predicted indeces and map them to words for output visualization
+    # we use wordtoix to take raw words and get their index in word vector matrix
+    ixtoword = {}
+    ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
+    wordtoix = {}
+    wordtoix['#START#'] = 0 # make first vector be the start token
+    ix = 1
+    for w in vocab:
+      wordtoix[w] = ix
+      ixtoword[ix] = w
+      ix += 1
+    # compute bias vector, which is related to the log probability of the distribution
+    # of the labels (words) and how often they occur. We will use this vector to initialize
+    # the decoder weights, so that the loss function doesnt show a huge increase in performance
+    # very quickly (which is just the network learning this anyway, for the most part). This makes
+    # the visualizations of the cost function nicer because it doesn't look like a hockey stick.
+    # for example on Flickr8K, doing this brings down initial perplexity from ~2500 to ~170.
+    word_counts['.'] = nsents
+    bias_init_vector = np.array([1.0*word_counts[ixtoword[i]] for i in ixtoword])
+    bias_init_vector /= np.sum(bias_init_vector) # normalize to frequencies
+    bias_init_vector = np.log(bias_init_vector)
+    bias_init_vector -= np.max(bias_init_vector) # shift to nice numeric range
+    return wordtoix, ixtoword, bias_init_vector
+
+
+################### 학습 관련 Parameters #####################
+
+dim_embed = 256
+dim_hidden = 256
 dim_image = 4096
-batch_size = 200
+batch_size = 128
 
 #learning_rate = 0.001
 n_epochs = 1000
@@ -190,11 +219,15 @@ annotation_path = os.path.join(data_path, 'results_20130124.token')
 dictionary_path = os.path.join(data_path, 'dictionary.pkl')
 ################################################################
 
+
 def train():
 
     learning_rate = 0.001
-    dictionary = pd.read_pickle(dictionary_path)
+    dictionary = pd.read_pickle(dictionary_path); dictionary.sort()
     feats, captions = get_caption_data(annotation_path, feat_path)
+    wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
+
+    np.save('ixtoword', ixtoword)
 
     index = np.arange(len(feats))
     np.random.shuffle(index)
@@ -203,6 +236,7 @@ def train():
     captions = captions[index]
 
     sess = tf.InteractiveSession()
+    n_words = len(wordtoix)
     maxlen = np.max( map(lambda x: len(x.split(' ')), captions) )
     caption_generator = Caption_Generator(
             dim_image=dim_image,
@@ -210,14 +244,14 @@ def train():
             dim_embed=dim_embed,
             batch_size=batch_size,
             n_lstm_steps=maxlen+2,
-            n_words=n_words)
+            n_words=n_words,
+            bias_init_vector=bias_init_vector)
 
     loss, image, sentence, mask = caption_generator.build_model()
 
     saver = tf.train.Saver(max_to_keep=50)
     tf.initialize_all_variables().run()
 
-    step = 0
     for epoch in range(n_epochs):
         train_op = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
         #train_op = tf.train.MomentumOptimizer(learning_rate, momentum).minimize(loss)
@@ -229,13 +263,10 @@ def train():
             current_feats = feats[start:end]
             current_captions = captions[start:end]
 
-            current_caption_ind = map(lambda cap: map(lambda word: dictionary[word] if word in dictionary else 1, \
-                    cap.lower().split(' ')[:-1]), current_captions)
+            current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ')[:-1] if word in wordtoix], current_captions)
 
             current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
             current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 0), current_caption_matrix] ).astype(int)
-
-            # padding을 maxlen+1만큼 해주는 건 마지막에 0을 박기 위해서임.
 
             current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
             nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
@@ -251,7 +282,6 @@ def train():
                 })
 
             print "Current Cost: ", loss_value
-            step += 1
 
         print "Epoch ", epoch, " is done. Saving the model ... "
         saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
