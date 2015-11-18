@@ -60,22 +60,22 @@ class Caption_Generator():
         sentence_emb += self.bemb
 
         sentence_emb = tf.concat(concat_dim=1, values=[image_emb, sentence_emb])
-        sentence_emb = tf.nn.dropout(sentence_emb, 0.5)
+        #sentence_emb = tf.nn.dropout(sentence_emb, 0.5)
         state = tf.zeros([self.batch_size, self.lstm.state_size])
 
         loss = 0.0
         with tf.variable_scope("RNN"):
             for i in range(self.n_lstm_steps): # maxlen + 1
                 if i > 0 : tf.get_variable_scope().reuse_variables()
-                labels = tf.expand_dims(sentence[:, i], 1) # (batch_size)
-                indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
-                concated = tf.concat(1, [indices, labels])
-                onehot_labels = tf.sparse_to_dense(
-                        concated, tf.pack([self.batch_size, self.n_words]), 1.0, 0.0) # (batch_size, n_words)
 
                 output, state = self.lstm(sentence_emb[:,i,:], state) # (batch_size, dim_hidden)
 
                 if i > 0: # 이미지 다음 바로 나오는건 #START# 임. 이건 무시.
+                    labels = tf.expand_dims(sentence[:, i], 1) # (batch_size)
+                    indices = tf.expand_dims(tf.range(0, self.batch_size, 1), 1)
+                    concated = tf.concat(1, [indices, labels])
+                    onehot_labels = tf.sparse_to_dense(
+                            concated, tf.pack([self.batch_size, self.n_words]), 1.0, 0.0) # (batch_size, n_words)
 
                     logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b # (batch_size, n_words)
                     cross_entropy = tf.nn.softmax_cross_entropy_with_logits(logit_words, onehot_labels)
@@ -84,8 +84,8 @@ class Caption_Generator():
                     current_loss = tf.reduce_sum(cross_entropy)
                     loss = loss + current_loss
 
-        loss = loss / tf.reduce_sum(mask)
-        return loss, image, sentence, mask
+            loss = loss / tf.reduce_sum(mask)
+            return loss, image, sentence, mask
 
     def build_generator(self, maxlen):
         image = tf.placeholder(tf.float32, [1, self.dim_image])
@@ -161,8 +161,6 @@ def get_caption_data(annotation_path, feat_path):
      return feats, captions
 
 def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
-    # count up all word counts so that we can threshold
-    # this shouldnt be too expensive of an operation
     print 'preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, )
     word_counts = {}
     nsents = 0
@@ -173,11 +171,6 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
     vocab = [w for w in word_counts if word_counts[w] >= word_count_threshold]
     print 'filtered words from %d to %d' % (len(word_counts), len(vocab))
 
-    # with K distinct words:
-    # - there are K+1 possible inputs (START token and all the words)
-    # - there are K+1 possible outputs (END token and all the words)
-    # we use ixtoword to take predicted indeces and map them to words for output visualization
-    # we use wordtoix to take raw words and get their index in word vector matrix
     ixtoword = {}
     ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
     wordtoix = {}
@@ -187,12 +180,7 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
       wordtoix[w] = ix
       ixtoword[ix] = w
       ix += 1
-    # compute bias vector, which is related to the log probability of the distribution
-    # of the labels (words) and how often they occur. We will use this vector to initialize
-    # the decoder weights, so that the loss function doesnt show a huge increase in performance
-    # very quickly (which is just the network learning this anyway, for the most part). This makes
-    # the visualizations of the cost function nicer because it doesn't look like a hockey stick.
-    # for example on Flickr8K, doing this brings down initial perplexity from ~2500 to ~170.
+
     word_counts['.'] = nsents
     bias_init_vector = np.array([1.0*word_counts[ixtoword[i]] for i in ixtoword])
     bias_init_vector /= np.sum(bias_init_vector) # normalize to frequencies
@@ -216,14 +204,12 @@ model_path = './models'
 data_path = './data'
 feat_path = './data/feats.npy'
 annotation_path = os.path.join(data_path, 'results_20130124.token')
-dictionary_path = os.path.join(data_path, 'dictionary.pkl')
 ################################################################
 
 
 def train():
 
     learning_rate = 0.001
-    dictionary = pd.read_pickle(dictionary_path); dictionary.sort()
     feats, captions = get_caption_data(annotation_path, feat_path)
     wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
@@ -245,7 +231,7 @@ def train():
             batch_size=batch_size,
             n_lstm_steps=maxlen+2,
             n_words=n_words,
-            bias_init_vector=bias_init_vector)
+            )#bias_init_vector=bias_init_vector)
 
     loss, image, sentence, mask = caption_generator.build_model()
 
@@ -275,6 +261,9 @@ def train():
             for ind, row in enumerate(current_mask_matrix):
                 row[:nonzeros[ind]+1] = 1
 
+            ipdb.set_trace()
+
+            ipdb.set_trace()
             _, loss_value = sess.run([train_op, loss], feed_dict={
                 image: current_feats,
                 sentence : current_caption_matrix,
@@ -289,8 +278,10 @@ def train():
 
 def test(test_feat='./data/test_feat2.npy', model_path='./models/model-77', maxlen=30): # Naive greedy search
 
-    dictionary = pd.read_pickle(dictionary_path)
-    inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
+#    dictionary = pd.read_pickle(dictionary_path)
+#    inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
+
+    ixtoword = np.load('ixtoword.npy')
     feat = [np.load(test_feat)]
     sess = tf.InteractiveSession()
     caption_generator = Caption_Generator(
@@ -310,15 +301,14 @@ def test(test_feat='./data/test_feat2.npy', model_path='./models/model-77', maxl
     generated_word_index= sess.run(generated_words, feed_dict={image:feat})
     generated_word_index = np.hstack(generated_word_index)
 
-    generated_sentence = inverse_dictionary[generated_word_index]
+    generated_sentence = [ixtoword[x] for x in generated_word_index]
 
     ipdb.set_trace()
 
 def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-44', maxlen=30): # Beam Search
     k = 8
 
-    dictionary = pd.read_pickle(dictionary_path)
-    inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
+    ixtoword = np.load('ixtoword.npy')
     feat = [np.load(test_feat)]
     sess = tf.InteractiveSession()
     caption_generator = Caption_Generator(
@@ -381,7 +371,6 @@ def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-44', ma
 
         all_probs = np.hstack(all_probs)
         state_list = np.vstack(state_list)
-        ipdb.set_trace()
 
         top_k_index_global = all_probs.argsort()[::-1][:k]
         prob_list = all_probs[top_k_index_global]
@@ -394,8 +383,6 @@ def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-44', ma
 
         last_sents = np.concatenate([last_sents[top_k_k], top_k_index[:,None]], 1)
         last_state_val = state_list[top_k_k]
-
-        ipdb.set_trace()
 
         for dead in last_sents[dead_k]:
             final_candidate.append(dead)

@@ -125,6 +125,7 @@ class Caption_Generator():
 
         image_enc = T.dot(image, self.encode_img_W) + self.encode_img_b # (n_samples, dim_hidden)
         X = T.concatenate([image_enc[None,:,:], emb_dimshuffle], axis=0) # (n_timestep + 1, n_samples, dim_hidden)
+        X = X[:-1,:] # compensating the effect of image concat
 
         h_list = self.forward_lstm(X)#, mask_dimshuffle) # (n_timestep, n_samples, dim_hidden)
 
@@ -156,8 +157,6 @@ class Caption_Generator():
 def RMSprop(cost, params, lr=0.001, rho=0.999, epsilon=1e-8, grad_clip=2.):
     grads = T.grad(cost=cost, wrt=params)
     updates = []
-
-    #grads = T.clip(grads, -grad_clip, grad_clip)
 
     for p, g in zip(params, grads):
         acc = theano.shared(p.get_value() * 0.)
@@ -269,7 +268,7 @@ def train():
 
             current_caption_ind = map(lambda cap: [wordtoix[word] for word in cap.lower().split(' ')[:-1] if word in wordtoix], current_captions)
 
-            maxlen = np.max(map(lambda x: len(x), current_caption_ind)) + 1
+            maxlen = np.max(map(lambda x: len(x), current_caption_ind))
 
             current_caption_matrix = sequence.pad_sequences(current_caption_ind, padding='post', maxlen=maxlen+1)
             current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 0), current_caption_matrix] ).astype(int)
@@ -279,8 +278,6 @@ def train():
 
             for ind, row in enumerate(current_mask_matrix):
                 row[:nonzeros[ind]+1] = 1
-
-            ipdb.set_trace()
 
             cost = train_function(current_feats, current_caption_matrix, current_mask_matrix)
 
