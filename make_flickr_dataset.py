@@ -5,7 +5,6 @@ import cPickle
 from taeksoo.cnn_util import *
 from sklearn.feature_extraction.text import CountVectorizer
 
-
 vgg_model = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers.caffemodel'
 vgg_deploy = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers_deploy.prototxt'
 
@@ -23,16 +22,16 @@ if not os.path.exists(feat_path):
     feats = cnn.get_features(annotations['image'].values)
     np.save(feat_path, feats)
 
-captions = annotations['caption'].values
+#captions = annotations['caption'].values
 
-vectorizer = CountVectorizer(max_features=3000 - 2, token_pattern='\\b\\w+\\b').fit(captions)
-dictionary = vectorizer.vocabulary_
-dictionary = pd.Series(dictionary) + 2
+#vectorizer = CountVectorizer(max_features=3000 - 2, token_pattern='\\b\\w+\\b').fit(captions)
+#dictionary = vectorizer.vocabulary_
+#dictionary = pd.Series(dictionary) + 2
 
-dictionary['#START#'] = 0
-dictionary['UNK'] = 1
+#dictionary['#START#'] = 0
+#dictionary['UNK'] = 1
 
-with open('./data/dictionary.pkl', 'wb') as f:
-    cPickle.dump(dictionary, f)
-with open('./data/vectorizer.pkl', 'wb') as f:
-    cPickle.dump(vectorizer, f)
+#with open('./data/dictionary.pkl', 'wb') as f:
+#    cPickle.dump(dictionary, f)
+#with open('./data/vectorizer.pkl', 'wb') as f:
+#    cPickle.dump(vectorizer, f)
