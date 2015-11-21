@@ -20,4 +20,3 @@ annotations['image'] = annotations['image'].map(lambda x: os.path.join(flickr_im
 if not os.path.exists(feat_path):
     feats = cnn.get_features(annotations['image'].values)
     np.save(feat_path, feats)
-
