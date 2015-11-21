@@ -3,12 +3,12 @@
  * Borrowed some code and ideas from Andrej Karpathy's NeuralTalk.
 * You need flickr30k data (images and annotations)
  
-### 코드
+### Code
 * make_flickr_dataset.py : Extracting feats of flickr30k images, and save them in './data/feats.npy' 
 * model_tensorflow.py : TensorFlow Version
 * model_theano.py : Theano Version
  
-#### 사용방법
+#### Usage
 * Flickr30k Dataset Download
 * Extract VGG Featues of Flicker30k images (make_flickr_dataset.py)
 * Train: run train() in  model_tensorflow.py or model_theano.py
