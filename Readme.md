@@ -12,5 +12,5 @@
 * Flickr30k Dataset Download
 * Extract VGG Featues of Flicker30k images (make_flickr_dataset.py)
 * Train: run train() in  model_tensorflow.py or model_theano.py
-* Test: run test_v2() in model_tensorflow.py or test() in model_theano.py. 
+* Test: run test() in model_tensorflow.py or model_theano.py. 
  * parameters: VGG FC7 feature of test image, trained model path
