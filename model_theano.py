@@ -1,4 +1,5 @@
 #-*- coding: utf-8 -*-
+import optim
 import theano
 import theano.tensor as T
 
@@ -31,7 +32,7 @@ class Caption_Generator():
         if bias_init_vector is None:
             self.emb_word_b = initializations.uniform((n_words))
         else:
-            self.emb_word_b = theano.shared(bias_init_vector, borrow=True)
+            self.emb_word_b = theano.shared(bias_init_vector.astype(np.float32), borrow=True)
 
         self.params = [
                 self.Wemb, self.bemb,
@@ -105,15 +106,15 @@ class Caption_Generator():
 
             next_x = self.Wemb[max_index][None,:] + self.bemb
 
-            return [h,c, next_x]
+            return [h,c, next_x, max_index]
 
         rval, updates = theano.scan(
                 fn=_step,
-                outputs_info=[h,c,start_tag],
-                maxlen=maxlen)
+                outputs_info=[h,c,start_tag, None],
+                n_steps=maxlen)
 
-        h_list, c_list, x_list = rval
-        return x_list
+        h_list, c_list, x_list, word_list = rval
+        return word_list
 
     def build_model(self):
         image = T.matrix('image')
@@ -151,22 +152,8 @@ class Caption_Generator():
         image = T.matrix('image')
         image_enc = T.dot(image, self.encode_img_W) + self.encode_img_b
 
-        generated_sents = self.generate_lstm(image_enc)
+        generated_sents = self.generate_lstm(image_enc, maxlen)
         return theano.function(inputs=[image], outputs=generated_sents, allow_input_downcast=True)
-
-def RMSprop(cost, params, lr=0.001, rho=0.999, epsilon=1e-8, grad_clip=2.):
-    grads = T.grad(cost=cost, wrt=params)
-    updates = []
-
-    for p, g in zip(params, grads):
-        acc = theano.shared(p.get_value() * 0.)
-        acc_new = rho * acc + (1 - rho) * g ** 2
-        gradient_scaling = T.sqrt(acc_new + epsilon)
-        g = T.clip(g, -grad_clip,grad_clip) / gradient_scaling
-        updates.append((acc, acc_new))
-        updates.append((p, p - lr * g))
-
-    return updates
 
 def get_caption_data(annotation_path, feat_path):
     feats = np.load(feat_path)
@@ -176,8 +163,6 @@ def get_caption_data(annotation_path, feat_path):
     return feats, captions
 
 def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed this function from NeuralTalk
-       # count up all word counts so that we can threshold
-       # this shouldnt be too expensive of an operation
        print 'preprocessing word counts and creating vocab based on word count threshold %d' % (word_count_threshold, )
        word_counts = {}
        nsents = 0
@@ -188,11 +173,6 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
        vocab = [w for w in word_counts if word_counts[w] >= word_count_threshold]
        print 'filtered words from %d to %d' % (len(word_counts), len(vocab))
 
-       # with K distinct words:
-       # - there are K+1 possible inputs (START token and all the words)
-       # - there are K+1 possible outputs (END token and all the words)
-       # we use ixtoword to take predicted indeces and map them to words for output visualization
-       # we use wordtoix to take raw words and get their index in word vector matrix
        ixtoword = {}
        ixtoword[0] = '.'  # period at the end of the sentence. make first dimension be end token
        wordtoix = {}
@@ -202,12 +182,7 @@ def preProBuildWordVocab(sentence_iterator, word_count_threshold=30): # borrowed
          wordtoix[w] = ix
          ixtoword[ix] = w
          ix += 1
-       # compute bias vector, which is related to the log probability of the distribution
-       # of the labels (words) and how often they occur. We will use this vector to initialize
-       # the decoder weights, so that the loss function doesnt show a huge increase in performance
-       # very quickly (which is just the network learning this anyway, for the most part). This makes
-       # the visualizations of the cost function nicer because it doesn't look like a hockey stick.
-       # for example on Flickr8K, doing this brings down initial perplexity from ~2500 to ~170.
+
        word_counts['.'] = nsents
        bias_init_vector = np.array([1.0*word_counts[ixtoword[i]] for i in ixtoword])
        bias_init_vector /= np.sum(bias_init_vector) # normalize to frequencies
@@ -221,20 +196,22 @@ model_path = './models'
 data_path = './data'
 feat_path = './data/feats.npy'
 annotation_path = os.path.join(data_path, 'results_20130124.token')
-dictionary_path = os.path.join(data_path, 'dictionary.pkl')
+n_epochs = 10000
+batch_size = 300
+
+dim_embed = 256
+dim_hidden = 256
+dim_image = 4096
+
+grad_clip=2.0
+
+pretrained = './models/theano/iter_99.pickle'
 ################################################################
 
 
-def train():
-    n_epochs = 100
-    batch_size = 128
+def train(pretrained=pretrained):
 
-    dim_embed = 256
-    dim_hidden = 256
-    dim_image = 4096
-
-    learning_rate = 0.001
-
+    learning_rate = 0.0002
     feats, captions = get_caption_data(annotation_path, feat_path)
     wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
@@ -246,17 +223,32 @@ def train():
     feats = feats[index]
     captions = captions[index]
 
-    caption_generator = Caption_Generator(n_words, dim_embed, dim_hidden, dim_image, bias_init_vector=bias_init_vector)
+    if pretrained:
+        print "Start training using pretrained model"
+        with open(pretrained) as f:
+            caption_generator = cPickle.load(f)
+
+    else:
+        caption_generator = Caption_Generator(n_words, dim_embed, dim_hidden, dim_image, bias_init_vector=bias_init_vector)
+
     theano_image, theano_sentence, theano_mask, theano_cost_arr, theano_cost, output_word, hid = caption_generator.build_model()
 
-    for epoch in range(n_epochs):
+    # gradient clipping
+    grads = T.grad(cost=theano_cost, wrt=caption_generator.params)
+    if grad_clip > 0.:
+        g2 = 0.
+        for g in grads:
+            g2 += (g**2).sum()
+        new_grads=[]
+        for g in grads:
+            new_grads.append( T.switch(g2 > (grad_clip**2), g/T.sqrt(g2)*grad_clip, g))
+        grads = new_grads
 
-        updates = RMSprop(cost=theano_cost, params=caption_generator.params, lr=learning_rate)
-        train_function = theano.function(
-                inputs=[theano_image, theano_sentence, theano_mask],
-                outputs=theano_cost,
-                updates=updates,
-                allow_input_downcast=True)
+    lr = T.scalar('lr')
+    f_grad_shared, f_update = optim.adam(lr=lr, params=caption_generator.params, grads=grads,
+                                         inp=[theano_image, theano_sentence, theano_mask],
+                                         cost=theano_cost)
+    for epoch in range(n_epochs):
 
         for start, end in zip(
                 range(0, len(feats)+batch_size, batch_size),
@@ -274,15 +266,29 @@ def train():
             current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 0), current_caption_matrix] ).astype(int)
 
             current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
-            nonzeros = np.array(map(lambda x: (x != 0).sum()+1, current_caption_matrix))
+            nonzeros = np.array(map(lambda x: (x != 0).sum()+2, current_caption_matrix))
 
             for ind, row in enumerate(current_mask_matrix):
-                row[:nonzeros[ind]+1] = 1
+                row[:nonzeros[ind]] = 1
 
-            cost = train_function(current_feats, current_caption_matrix, current_mask_matrix)
+            cost = f_grad_shared(current_feats, current_caption_matrix, current_mask_matrix)
+            f_update(learning_rate)
 
             print cost
 
         with open('./models/theano/iter_'+str(epoch)+'.pickle', 'w') as f:
             cPickle.dump(caption_generator, f)
         learning_rate *= 0.98
+
+def test(test_feat='./cat.npy'):
+    ixtoword = np.load('./ixtoword.npy').tolist()
+    model_path = './models/theano/iter_99.pickle'
+    maxlen = 20
+    with open(model_path) as f:
+        model = cPickle.load(f)
+
+    generate_caption = model.build_generator(maxlen=maxlen)
+    aaa = generate_caption( [np.load(test_feat)] )
+    ipdb.set_trace()
+
+

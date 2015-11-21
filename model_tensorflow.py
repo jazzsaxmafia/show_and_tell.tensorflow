@@ -41,9 +41,11 @@ class Caption_Generator():
         self.encode_img_b = self.init_bias(dim_hidden, name='encode_img_b')
 
         self.embed_word_W = tf.Variable(tf.random_uniform([dim_hidden, n_words], -0.1, 0.1), name='embed_word_W')
-        self.embed_word_b = self.init_bias(n_words, name='embed_word_b')
+
         if bias_init_vector is not None:
-            self.embed_word_b.assign(bias_init_vector)
+            self.embed_word_b = tf.Variable(bias_init_vector.astype(np.float32))
+        else:
+            self.embed_word_b = self.init_bias(n_words, name='embed_word_b')
 
     def build_model(self):
 
@@ -52,23 +54,21 @@ class Caption_Generator():
         mask = tf.placeholder(tf.float32, [self.batch_size, self.n_lstm_steps])
 
         image_emb = tf.matmul(image, self.encode_img_W) + self.encode_img_b # (batch_size, dim_hidden)
-        image_emb = tf.expand_dims(image_emb, dim=1) # 이미지와 sentence가 차원이 달라서 더미 차원 추가해줘야함.
 
-        with tf.device("/cpu:0"):
-            sentence_emb = tf.nn.embedding_lookup(self.Wemb, sentence)
-
-        sentence_emb += self.bemb
-
-        sentence_emb = tf.concat(concat_dim=1, values=[image_emb, sentence_emb])
-        #sentence_emb = tf.nn.dropout(sentence_emb, 0.5)
         state = tf.zeros([self.batch_size, self.lstm.state_size])
 
         loss = 0.0
         with tf.variable_scope("RNN"):
             for i in range(self.n_lstm_steps): # maxlen + 1
+                if i == 0:
+                    current_emb = image_emb
+                else:
+                    with tf.device("/cpu:0"):
+                        current_emb = tf.nn.embedding_lookup(self.Wemb, sentence[:,i-1]) + self.bemb
+
                 if i > 0 : tf.get_variable_scope().reuse_variables()
 
-                output, state = self.lstm(sentence_emb[:,i,:], state) # (batch_size, dim_hidden)
+                output, state = self.lstm(current_emb, state) # (batch_size, dim_hidden)
 
                 if i > 0: # 이미지 다음 바로 나오는건 #START# 임. 이건 무시.
                     labels = tf.expand_dims(sentence[:, i], 1) # (batch_size)
@@ -84,7 +84,7 @@ class Caption_Generator():
                     current_loss = tf.reduce_sum(cross_entropy)
                     loss = loss + current_loss
 
-            loss = loss / tf.reduce_sum(mask)
+            loss = loss / tf.reduce_sum(mask[:,1:])
             return loss, image, sentence, mask
 
     def build_generator(self, maxlen):
@@ -200,7 +200,7 @@ batch_size = 128
 n_epochs = 1000
 ###############################################################
 #################### 잡다한 Parameters ########################
-model_path = './models'
+model_path = './models/tensorflow'
 data_path = './data'
 feat_path = './data/feats.npy'
 annotation_path = os.path.join(data_path, 'results_20130124.token')
@@ -210,6 +210,7 @@ annotation_path = os.path.join(data_path, 'results_20130124.token')
 def train():
 
     learning_rate = 0.001
+    momentum = 0.9
     feats, captions = get_caption_data(annotation_path, feat_path)
     wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
@@ -231,16 +232,16 @@ def train():
             batch_size=batch_size,
             n_lstm_steps=maxlen+2,
             n_words=n_words,
-            )#bias_init_vector=bias_init_vector)
+            bias_init_vector=bias_init_vector)
 
     loss, image, sentence, mask = caption_generator.build_model()
 
     saver = tf.train.Saver(max_to_keep=50)
+    train_op = tf.train.AdamOptimizer(learning_rate).minimize(loss)
     tf.initialize_all_variables().run()
 
     for epoch in range(n_epochs):
-        train_op = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
-        #train_op = tf.train.MomentumOptimizer(learning_rate, momentum).minimize(loss)
+        #train_op = tf.train.GradientDescentOptimizer(learning_rate).minimize(loss)
         for start, end in zip( \
                 range(0, len(feats), batch_size),
                 range(batch_size, len(feats), batch_size)
@@ -261,9 +262,6 @@ def train():
             for ind, row in enumerate(current_mask_matrix):
                 row[:nonzeros[ind]+1] = 1
 
-            ipdb.set_trace()
-
-            ipdb.set_trace()
             _, loss_value = sess.run([train_op, loss], feed_dict={
                 image: current_feats,
                 sentence : current_caption_matrix,
