@@ -43,7 +43,7 @@ class Caption_Generator():
         self.embed_word_W = tf.Variable(tf.random_uniform([dim_hidden, n_words], -0.1, 0.1), name='embed_word_W')
 
         if bias_init_vector is not None:
-            self.embed_word_b = tf.Variable(bias_init_vector.astype(np.float32))
+            self.embed_word_b = tf.Variable(bias_init_vector.astype(np.float32), name='embed_word_b')
         else:
             self.embed_word_b = self.init_bias(n_words, name='embed_word_b')
 
@@ -274,12 +274,14 @@ def train():
         saver.save(sess, os.path.join(model_path, 'model'), global_step=epoch)
         learning_rate *= 0.95
 
-def test(test_feat='./data/test_feat2.npy', model_path='./models/model-77', maxlen=30): # Naive greedy search
+def test(test_feat='./guitar_player.npy', model_path='./models/tensorflow/model-1', maxlen=30): # Naive greedy search
 
 #    dictionary = pd.read_pickle(dictionary_path)
 #    inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
 
-    ixtoword = np.load('ixtoword.npy')
+    ixtoword = np.load('ixtoword.npy').tolist()
+    n_words = len(ixtoword)
+
     feat = [np.load(test_feat)]
     sess = tf.InteractiveSession()
     caption_generator = Caption_Generator(
@@ -303,10 +305,11 @@ def test(test_feat='./data/test_feat2.npy', model_path='./models/model-77', maxl
 
     ipdb.set_trace()
 
-def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-44', maxlen=30): # Beam Search
+def test_v2(test_feat='./data/test_feat.npy', model_path='./models/tensorflow/model-1', maxlen=30): # Beam Search
     k = 8
 
-    ixtoword = np.load('ixtoword.npy')
+    ixtoword = np.load('ixtoword.npy').tolist()
+    n_words = len(ixtoword)
     feat = [np.load(test_feat)]
     sess = tf.InteractiveSession()
     caption_generator = Caption_Generator(
@@ -317,7 +320,6 @@ def test_v2(test_feat='./data/test_feat.npy', model_path='./models/model-44', ma
            n_lstm_steps=maxlen,
            n_words=n_words)
 
-    #image, state, output, top_k_words, top_k_scores = caption_generator.generate_from_image(k=k)
     image, state, output, first_word_prob = caption_generator.generate_from_image(k=k)
     #last_state, current_word, state_, output_, top_k_words_, top_k_scores_ = caption_generator.generate_from_word(k=k)
     last_state, current_word, state_, output_, word_prob = caption_generator.generate_from_word(k=k)
