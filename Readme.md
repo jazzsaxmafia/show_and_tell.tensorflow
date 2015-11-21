@@ -1,17 +1,16 @@
 # Neural Caption Generator
 * Implementation of "Show and Tell" http://arxiv.org/abs/1411.4555
- * Andrej Karpathy의 NeuralTalk 참고함.
-* flickr30k 데이터 필요.
+ * Borrowed some code and ideas from Andrej Karpathy's NeuralTalk.
+* You need flickr30k data (images and annotations)
  
 ### 코드
-* make_flickr_dataset.py : 단어 dictionary 생성
-* model_tensorflow.py : TensorFlow 버전
-* model_theano.py : Theano 버전
+* make_flickr_dataset.py : Extracting feats of flickr30k images, and save them in './data/feats.npy' 
+* model_tensorflow.py : TensorFlow Version
+* model_theano.py : Theano Version
  
 #### 사용방법
 * Flickr30k Dataset Download
-* Flicker30k 이미지에 대한 VGG feature 추출 (별도로 해야 함)
-* make_flickr_dataset.py 이용해 dictionary 생성
-* Train: model_tensorflow.py 에서 train()
-* Test: model_tensorflow.py에서 test(). 
- * parameters: 테스트 이미지의 VGG FC7 feature, 학습된 모델 path
+* Extract VGG Featues of Flicker30k images (make_flickr_dataset.py)
+* Train: run train() in  model_tensorflow.py or model_theano.py
+* Test: run test_v2() in model_tensorflow.py or test() in model_theano.py. 
+ * parameters: VGG FC7 feature of test image, trained model path
