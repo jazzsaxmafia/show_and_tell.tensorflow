@@ -1,5 +1,5 @@
 # Neural Caption Generator
-* Implementation of "Show and Tell" http://arxiv.org/abs/1411.4555
+* Tensorflow implementation of "Show and Tell" http://arxiv.org/abs/1411.4555
  * Borrowed some code and ideas from Andrej Karpathy's NeuralTalk.
 * You need flickr30k data (images and annotations)
  
