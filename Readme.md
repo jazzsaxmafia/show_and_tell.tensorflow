@@ -5,14 +5,13 @@
  
 ### Code
 * make_flickr_dataset.py : Extracting feats of flickr30k images, and save them in './data/feats.npy' 
-* model_tensorflow.py : TensorFlow Version
-* model_theano.py : Theano Version
+* model.py : TensorFlow Version
  
 #### Usage
 * Flickr30k Dataset Download
 * Extract VGG Featues of Flicker30k images (make_flickr_dataset.py)
 * Train: run train() in  model.py
-* Test: run test() or test_tf in model.py
+* Test: run test() or test_tf() in model.py
  * parameters: VGG FC7 feature of test image, trained model path
  * Once you download Tensorflow VGG Net (one of the links below), you don't need Caffe when testing.
 
