@@ -269,6 +269,9 @@ def test(test_feat='./guitar_player.npy', model_path='./models/tensorflow/model-
 def read_image(path):
 
      img = crop_image(path, target_height=224, target_width=224)
+     if img.shape[2] == 4:
+         img = img[:,:,:3]
+
      img = img[None, ...]
      return img
 
