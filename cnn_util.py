@@ -4,8 +4,11 @@ import cv2
 import numpy as np
 import skimage
 
-def crop_image(x, target_height=227, target_width=227):
-    image = skimage.img_as_float(skimage.io.imread(x)).astype(np.float32)
+def crop_image(x, target_height=227, target_width=227, as_float=True):
+    #image = skimage.img_as_float(skimage.io.imread(x)).astype(np.float32)
+    image = skimage.io.imread(x)
+    if as_float:
+        image = skimage.img_as_float(image).astype(np.float32)
 
     if len(image.shape) == 2:
         image = np.tile(image[:,:,None], 3)

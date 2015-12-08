@@ -116,43 +116,6 @@ class Caption_Generator():
 
         return image, generated_words
 
-    def generate_from_image(self, k):
-        image = tf.placeholder(tf.float32, [1, self.dim_image])
-        image_emb = tf.matmul(image, self.encode_img_W) + self.encode_img_b
-
-        state = tf.zeros([1., self.lstm.state_size])
-
-        with tf.variable_scope("RNN"):
-            output, state = self.lstm(image_emb, state)
-            tf.get_variable_scope().reuse_variables()
-
-            starting_emb = tf.nn.embedding_lookup(self.Wemb, [0]) + self.bemb
-            output, state = self.lstm( starting_emb, state ) # 이미지 넣고 그다음 2(#START#) 넣고 시작
-            logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b
-
-            softmax = tf.nn.softmax(logit_words)
-            #top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
-
-        return image, state, output, softmax # top_k_indices, top_k_scores
-
-    def generate_from_word(self, k):
-        last_state = tf.placeholder(tf.float32, [1, self.dim_hidden*2])
-        current_word = tf.placeholder(tf.int32, [1])
-        with tf.device("/cpu:0"):
-            current_emb = tf.nn.embedding_lookup(self.Wemb, current_word)
-
-        current_emb += self.bemb
-
-        with tf.variable_scope("RNN"):
-            tf.get_variable_scope().reuse_variables()
-            output, state = self.lstm(current_emb, last_state)
-            logit_words = tf.matmul(output, self.embed_word_W) + self.embed_word_b
-
-            softmax = tf.nn.softmax(logit_words)
-            #top_k_scores, top_k_indices = tf.nn.top_k(softmax, k)
-
-        return last_state, current_word, state, output, softmax#top_k_indices, top_k_scores
-
 def get_caption_data(annotation_path, feat_path):
      feats = np.load(feat_path)
      annotations = pd.read_table(annotation_path, sep='\t', header=None, names=['image', 'caption'])
@@ -201,6 +164,7 @@ n_epochs = 1000
 ###############################################################
 #################### 잡다한 Parameters ########################
 model_path = './models/tensorflow'
+vgg_path = './data/vgg16.tfmodel'
 data_path = './data'
 feat_path = './data/feats.npy'
 annotation_path = os.path.join(data_path, 'results_20130124.token')
@@ -214,7 +178,7 @@ def train():
     feats, captions = get_caption_data(annotation_path, feat_path)
     wordtoix, ixtoword, bias_init_vector = preProBuildWordVocab(captions)
 
-    np.save('ixtoword', ixtoword)
+    np.save('data/ixtoword', ixtoword)
 
     index = np.arange(len(feats))
     np.random.shuffle(index)
@@ -256,11 +220,11 @@ def train():
             current_caption_matrix = np.hstack( [np.full( (len(current_caption_matrix),1), 0), current_caption_matrix] ).astype(int)
 
             current_mask_matrix = np.zeros((current_caption_matrix.shape[0], current_caption_matrix.shape[1]))
-            nonzeros = np.array( map(lambda x: (x != 0).sum()+1, current_caption_matrix ))
-            # 여기서 +1 해주는 건 캡션 맨 앞에 #START# (2) 를 넣었기 때문임.
+            nonzeros = np.array( map(lambda x: (x != 0).sum()+2, current_caption_matrix ))
+            #  +2 -> #START# and '.'
 
             for ind, row in enumerate(current_mask_matrix):
-                row[:nonzeros[ind]+1] = 1
+                row[:nonzeros[ind]] = 1
 
             _, loss_value = sess.run([train_op, loss], feed_dict={
                 image: current_feats,
@@ -276,10 +240,7 @@ def train():
 
 def test(test_feat='./guitar_player.npy', model_path='./models/tensorflow/model-1', maxlen=30): # Naive greedy search
 
-#    dictionary = pd.read_pickle(dictionary_path)
-#    inverse_dictionary = pd.Series(dictionary.keys(), index=dictionary.values)
-
-    ixtoword = np.load('ixtoword.npy').tolist()
+    ixtoword = np.load('data/ixtoword.npy').tolist()
     n_words = len(ixtoword)
 
     feat = [np.load(test_feat)]
@@ -305,13 +266,28 @@ def test(test_feat='./guitar_player.npy', model_path='./models/tensorflow/model-
 
     ipdb.set_trace()
 
-def test_v2(test_feat='./data/test_feat.npy', model_path='./models/tensorflow/model-1', maxlen=30): # Beam Search
-    k = 8
+def read_image(path):
 
-    ixtoword = np.load('ixtoword.npy').tolist()
+     img = crop_image(path, target_height=224, target_width=224)
+     img = img[None, ...]
+     return img
+
+
+def test_tf(test_image_path=None, model_path='./models/model-72', maxlen=30):
+    with open(vgg_path) as f:
+        fileContent = f.read()
+        graph_def = tf.GraphDef()
+        graph_def.ParseFromString(fileContent)
+
+    images = tf.placeholder("float32", [1, 224, 224, 3])
+    tf.import_graph_def(graph_def, input_map={"images":images})
+
+    ixtoword = np.load('./data/ixtoword.npy').tolist()
     n_words = len(ixtoword)
-    feat = [np.load(test_feat)]
+
+    image_val = read_image(test_image_path)
     sess = tf.InteractiveSession()
+
     caption_generator = Caption_Generator(
            dim_image=dim_image,
            dim_hidden=dim_hidden,
@@ -320,78 +296,20 @@ def test_v2(test_feat='./data/test_feat.npy', model_path='./models/tensorflow/mo
            n_lstm_steps=maxlen,
            n_words=n_words)
 
-    image, state, output, first_word_prob = caption_generator.generate_from_image(k=k)
-    #last_state, current_word, state_, output_, top_k_words_, top_k_scores_ = caption_generator.generate_from_word(k=k)
-    last_state, current_word, state_, output_, word_prob = caption_generator.generate_from_word(k=k)
+    graph = tf.get_default_graph()
+    fc7 = sess.run(graph.get_tensor_by_name("import/fc7_relu:0"), feed_dict={images:image_val})
+
+    fc7_tf, generated_words = caption_generator.build_generator(maxlen=maxlen)
 
     saver = tf.train.Saver()
     saver.restore(sess, model_path)
 
-    last_state_val = sess.run(state, feed_dict={image:feat}).repeat(k, axis=0)
-    first_word_prob_val = sess.run(first_word_prob, feed_dict={image:feat})[0]
+    generated_word_index= sess.run(generated_words, feed_dict={fc7_tf:fc7})
+    generated_word_index = np.hstack(generated_word_index)
 
-    top_k_index = np.argsort(first_word_prob_val)[::-1]#[:k]
-    top_k_prob = np.log(first_word_prob_val[top_k_index])
+    generated_words = [ixtoword[x] for x in generated_word_index]
+    punctuation = np.argmax(np.array(generated_words) == '.')+1
 
-    nonzero_index = np.where(top_k_index != 0)[0] # #START#, UNK는 제외
-    top_k_index = top_k_index[ nonzero_index ][:k]
-    top_k_prob = top_k_prob[ top_k_index ]
-
-    #last_sents = top_k_words_val#.repeat(k)[:,None]
-    prob_list = top_k_prob
-    last_sents = top_k_index#.repeat(k)[:,None]
-
-    final_candidate = []
-
-    for i in range(maxlen):
-
-        all_state = []
-
-        if len(last_sents.shape ) == 1:
-            last_sents = last_sents[:,None]
-
-        all_probs = []
-        state_list = []
-        for k_ in range(k): # 매 번 k*k개의 sub-sentence가 생성됨. 이 중에서 k개를 골라야 함.
-            current_state_val = sess.run(state_, feed_dict={
-                last_state:[last_state_val[k_]],
-                current_word: [top_k_index[k_]]
-                })
-
-            state_list.append(current_state_val)
-
-            word_prob_val = np.log(sess.run(word_prob, feed_dict={
-                last_state:[last_state_val[k_]],
-                current_word: [top_k_index[k_]]
-                })[0])
-
-            acc_probs = word_prob_val + prob_list[k_]
-            all_state.append(current_state_val)
-            all_probs.append(acc_probs)
-
-        all_probs = np.hstack(all_probs)
-        state_list = np.vstack(state_list)
-
-        top_k_index_global = all_probs.argsort()[::-1][:k]
-        prob_list = all_probs[top_k_index_global]
-
-        top_k_k = top_k_index_global / n_words
-        top_k_index = top_k_index_global % n_words
-
-        dead_k = np.where( top_k_index == 0 )[0]
-        n_dead_k = len(dead_k)
-
-        last_sents = np.concatenate([last_sents[top_k_k], top_k_index[:,None]], 1)
-        last_state_val = state_list[top_k_k]
-
-        for dead in last_sents[dead_k]:
-            final_candidate.append(dead)
-
-        last_sents = np.delete(last_sents, dead_k, 0)
-        prob_list = np.delete(prob_list, dead_k, 0)
-        last_state_val = np.delete(last_state_val, dead_k, 0)
-        top_k_index = np.delete(top_k_index, dead_k, 0)
-
-        k -= n_dead_k
-
-
+    generated_words = generated_words[:punctuation]
+    generated_sentence = ' '.join(generated_words)
+    print generated_sentence

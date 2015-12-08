@@ -8,7 +8,7 @@ vgg_model = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers.caffemo
 vgg_deploy = '/home/taeksoo/Package/caffe/models/vgg/VGG_ILSVRC_19_layers_deploy.prototxt'
 
 annotation_path = './data/results_20130124.token'
-flickr_image_path = '../show_attend_and_tell/images/flickr30k/'
+flickr_image_path = '../show_attend_and_tell/images/flickr30k-images/'
 feat_path = './data/feats.npy'
 
 cnn = CNN(model=vgg_model, deploy=vgg_deploy, width=224, height=224)
