@@ -23,3 +23,5 @@
 * Tensorflow VGG net [download](https://drive.google.com/file/d/0B5o40yxdA9PqSGtVODN0UUlaWTg/view?usp=sharing)
  * This file is used in test_tf() in model.py
 * Along the files above, you might want to download flickr30k annotation data from [link](http://shannon.cs.illinois.edu/DenotationGraph/) 
+
+![alt tag](https://github.com/jazzsaxmafia/show_and_tell.tensorflow/blob/master/result.jpg)
