@@ -1,7 +1,6 @@
 #-*- coding: utf-8 -*-
 import math
 import os
-import ipdb
 import tensorflow as tf
 import numpy as np
 import pandas as pd
@@ -264,7 +263,6 @@ def test(test_feat='./guitar_player.npy', model_path='./models/tensorflow/model-
 
     generated_sentence = [ixtoword[x] for x in generated_word_index]
 
-    ipdb.set_trace()
 
 def read_image(path):
 
