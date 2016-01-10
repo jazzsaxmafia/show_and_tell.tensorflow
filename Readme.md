@@ -25,3 +25,6 @@
 * Along with the files above, you might want to download flickr30k annotation data from [link](http://shannon.cs.illinois.edu/DenotationGraph/) 
 
 ![alt tag](https://github.com/jazzsaxmafia/show_and_tell.tensorflow/blob/master/result.jpg)
+
+### License
+* BSD license
